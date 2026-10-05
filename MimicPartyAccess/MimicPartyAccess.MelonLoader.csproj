@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>MimicPartyAccess</AssemblyName>
+    <RootNamespace>MimicPartyAccess</RootNamespace>
+    <Version>0.1.0</Version>
+    <MelonLoaderPath Condition="'$(MelonLoaderPath)' == ''">$(MimicPartyPath)\MelonLoader\net6</MelonLoaderPath>
+    <OutputPath>bin\MelonLoader\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Plugin.cs" />
+    <Compile Remove="Tools\**\*.cs" />
+    <Compile Remove="obj\**\*.cs" />
+    <Reference Include="MelonLoader">
+      <HintPath>$(MelonLoaderPath)\MelonLoader.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(MelonLoaderPath)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="RequireMelonLoaderReferences" BeforeTargets="ResolveReferences" Condition="!Exists('$(MelonLoaderPath)\MelonLoader.dll')">
+    <Error Text="MelonLoader.dll not found. Build with -p:MelonLoaderPath=&quot;folder containing MelonLoader.dll and 0Harmony.dll&quot;." />
+  </Target>
+</Project>
