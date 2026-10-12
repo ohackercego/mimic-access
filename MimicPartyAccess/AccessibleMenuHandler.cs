@@ -13,8 +13,18 @@ internal static class AccessibleMenuHandler
     private static readonly string[] ScreenTypes =
     {
         "Mimick.UI.PlaytestPopup",
-        "Mimick.UI.PauseMenu",
         "Mimick.UI.ConfirmDialog",
+        "Mimick.UI.LevelUpPopup",
+        "Mimick.UI.SeasonRewardPrompt",
+        "Mimick.UI.PremiumDailyPrompt",
+        "Mimick.UI.PremiumTicketOverlay",
+        "Mimick.UI.HeadphoneHint",
+        "Mimick.UI.ReviewPrompt",
+        "Mimick.UI.LeaderboardPanel",
+        "Mimick.UI.ThemePinPanel",
+        "Mimick.UI.SoundTrimPanel",
+        "Mimick.UI.PlayerCardPanel",
+        "Mimick.UI.PauseMenu",
         "Mimick.UI.GameModePanel",
         "Mimick.UI.RoomBrowserPanel",
         "Mimick.UI.AccountLinkPanel",
@@ -56,6 +66,18 @@ internal static class AccessibleMenuHandler
             ["PlaytestPopup"] = "screen_playtest_popup",
             ["PauseMenu"] = "screen_settings",
             ["ConfirmDialog"] = "screen_confirm",
+            ["LevelUpPopup"] = "screen_level_up_popup",
+            ["SeasonRewardPrompt"] = "screen_season_reward_prompt",
+            ["PremiumDailyPrompt"] = "screen_premium_daily_prompt",
+            ["PremiumTicketOverlay"] = "screen_premium_ticket_overlay",
+            ["HeadphoneHint"] = "screen_headphone_hint",
+            ["ReviewPrompt"] = "screen_review_prompt",
+            ["LeaderboardPanel"] = "screen_leaderboard_panel",
+            ["ThemePinPanel"] = "screen_theme_pin_panel",
+            ["SoundTrimPanel"] = "screen_sound_trim_panel",
+            ["LobbyRulesPanel"] = "screen_lobby_rules_panel",
+            ["LobbyThemePanel"] = "screen_lobby_theme_panel",
+            ["PlayerCardPanel"] = "screen_player_card_panel",
             ["AccountLinkPanel"] = "screen_account_link",
             ["GameModePanel"] = "screen_game_mode",
             ["RoomBrowserPanel"] = "screen_room_browser",
@@ -145,7 +167,14 @@ internal static class AccessibleMenuHandler
                 if (onEnable != null && onEnable != activation)
                     harmony.Patch(onEnable, postfix: new HarmonyMethod(started));
 
+                var setOpen = FindDeclaredBoolMethod(screenType, "SetOpen");
+                var onSetOpen = typeof(AccessibleMenuHandler).GetMethod(
+                    nameof(OnScreenSetOpen), BindingFlags.Static | BindingFlags.NonPublic);
+                if (setOpen != null && onSetOpen != null)
+                    harmony.Patch(setOpen, postfix: new HarmonyMethod(onSetOpen));
+
                 var onDestroy = FindDeclaredNoArgumentMethod(screenType, "Close")
+                    ?? FindDeclaredNoArgumentMethod(screenType, "Dismiss")
                     ?? FindDeclaredNoArgumentMethod(screenType, "OnDestroy");
                 var destroyed = typeof(AccessibleMenuHandler).GetMethod(
                     nameof(OnScreenDestroyed), BindingFlags.Static | BindingFlags.NonPublic);
@@ -357,16 +386,31 @@ internal static class AccessibleMenuHandler
         return false;
     }
 
+    private static void OnScreenSetOpen(object __instance, bool open)
+    {
+        try
+        {
+            if (open)
+                OnScreenStarted(__instance);
+            else
+                OnScreenDestroyed(__instance);
+        }
+        catch (Exception exception)
+        {
+            _logger?.Warning($"OnScreenSetOpen hook failed for {__instance?.GetType().Name}: {exception.Message}");
+        }
+    }
+
     private static void OnScreenStarted(object __instance)
     {
         try
         {
+            if (!IsScreenActive(__instance))
+                return;
+
             var instanceKey = __instance.GetType().FullName ?? __instance.GetType().Name;
             _knownScreens[instanceKey] = __instance;
             _lastStartedScreen = __instance;
-
-            if (!IsScreenActive(__instance))
-                return;
 
             if (Equals(_activeScreen, __instance))
                 return;
@@ -384,7 +428,31 @@ internal static class AccessibleMenuHandler
             var typeName = __instance.GetType().Name;
             _logger?.Info($"Accessible screen active: {typeName}; {_options.Count} controls discovered.");
             var messageKey = ScreenMessageKeys.TryGetValue(typeName, out var key) ? key : "screen_generic";
-            ScreenReader.Say(Loc.Get("menu_opened", Loc.Get(messageKey)));
+
+            if (typeName == "LobbyScreen")
+            {
+                var roomCode = ReflectionReader.ReadText(ReadMember(__instance, "roomCodeLabel"));
+                if (!string.IsNullOrWhiteSpace(roomCode))
+                {
+                    ScreenReader.Say($"{Loc.Get("menu_opened", Loc.Get(messageKey))}. {Loc.Get("screen_lobby_code", roomCode)}");
+                }
+                else
+                {
+                    ScreenReader.Say(Loc.Get("menu_opened", Loc.Get(messageKey)));
+                }
+            }
+            else
+            {
+                var popupContent = ExtractPopupContent(__instance);
+                if (!string.IsNullOrWhiteSpace(popupContent))
+                {
+                    ScreenReader.Say($"{Loc.Get("menu_opened", Loc.Get(messageKey))}. {popupContent}");
+                }
+                else
+                {
+                    ScreenReader.Say(Loc.Get("menu_opened", Loc.Get(messageKey)));
+                }
+            }
 
             if (_options.Count > 0)
             {
@@ -399,6 +467,25 @@ internal static class AccessibleMenuHandler
         catch (Exception exception)
         {
             _logger?.Warning($"OnScreenStarted hook failed for {__instance?.GetType().Name}: {exception.Message}");
+        }
+    }
+
+    private static string? ExtractPopupContent(object screen)
+    {
+        try
+        {
+            var parts = new List<string>();
+            foreach (var memberName in new[] { "titleLabel", "titleText", "headerLabel", "messageLabel", "messageText", "bodyLabel", "bodyText", "descriptionLabel", "descriptionText" })
+            {
+                var text = ReflectionReader.ReadText(ReadMember(screen, memberName));
+                if (!string.IsNullOrWhiteSpace(text) && !parts.Contains(text))
+                    parts.Add(text);
+            }
+            return parts.Count > 0 ? string.Join(". ", parts) : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -424,11 +511,16 @@ internal static class AccessibleMenuHandler
     private static bool IsOverlayScreen(object screen)
     {
         var name = screen.GetType().Name;
-        return name is "PlaytestPopup" or "PauseMenu" or "RoomBrowserPanel" or "GameModePanel" or "AccountLinkPanel"
-            or "SkinPanel" or "AuraPanel" or "RevealAnimationPanel" or "InviteFriendPanel" or "FriendsPanel"
-            or "MimiBucksShopPanel" or "SeasonPassPanel" or "ObjectivesPanel" or "NamePanel" or "ThemePreviewPanel"
-            or "DiscordPanel" or "PlayerReportPanel" or "CountryPreferencePanel" or "PackFeedbackPanel"
-            or "ThemeFeedbackPanel" or "ThemeDiscordPopup";
+        if (name is "LobbyRulesPanel" or "LobbyRoomDescription" or "LobbyThemePanel")
+            return false;
+
+        return name is "PauseMenu"
+            || name.EndsWith("Popup", StringComparison.Ordinal)
+            || name.EndsWith("Dialog", StringComparison.Ordinal)
+            || name.EndsWith("Panel", StringComparison.Ordinal)
+            || name.EndsWith("Prompt", StringComparison.Ordinal)
+            || name.EndsWith("Overlay", StringComparison.Ordinal)
+            || name.EndsWith("Hint", StringComparison.Ordinal);
     }
 
     private static void RefreshInlinePanel()
@@ -640,7 +732,45 @@ internal static class AccessibleMenuHandler
         {
             var screenName = _activeScreen.GetType().Name;
             var messageKey = ScreenMessageKeys.TryGetValue(screenName, out var key) ? key : "screen_generic";
-            InvokeNoArgument(_activeScreen, "Close");
+
+            var closed = false;
+            foreach (var methodName in new[] { "Close", "Dismiss", "Cancel", "ClosePopup" })
+            {
+                var method = _activeScreen.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+                if (method != null)
+                {
+                    method.Invoke(_activeScreen, null);
+                    closed = true;
+                    break;
+                }
+            }
+
+            if (!closed)
+            {
+                var setOpen = _activeScreen.GetType().GetMethod("SetOpen", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(bool) }, null);
+                if (setOpen != null)
+                {
+                    setOpen.Invoke(_activeScreen, new object[] { false });
+                    closed = true;
+                }
+            }
+
+            if (!closed && _options.Count > 0)
+            {
+                var dismissOption = _options.FirstOrDefault(opt =>
+                    opt.Kind == ControlKind.Button &&
+                    (opt.Label.Contains("fechar", StringComparison.OrdinalIgnoreCase) ||
+                     opt.Label.Contains("sair", StringComparison.OrdinalIgnoreCase) ||
+                     opt.Label.Contains("close", StringComparison.OrdinalIgnoreCase) ||
+                     opt.Label.Contains("cancel", StringComparison.OrdinalIgnoreCase) ||
+                     opt.Label.Contains("ok", StringComparison.OrdinalIgnoreCase)));
+                if (dismissOption != null)
+                {
+                    ActivateButton(dismissOption);
+                    closed = true;
+                }
+            }
+
             ScreenReader.Say(Loc.Get("menu_closed", Loc.Get(messageKey)));
         }
         catch (Exception exception)
@@ -657,26 +787,84 @@ internal static class AccessibleMenuHandler
         _nextScreenDiscovery = DateTime.UtcNow.AddMilliseconds(250);
         try
         {
-            // Optional fallback: the generated interop proxy for UnityEngine.Object does not
-            // always expose FindObjectOfType(Type) with a System.Type parameter, so screen
-            // discovery primarily relies on instances tracked through the method hooks.
-            // A null fallback must not skip the tracked-instance scan below.
             var unityObjectType = ReflectionReader.FindTypeByName("UnityEngine.Object");
             _findObjectOfType ??= unityObjectType?.GetMethods(BindingFlags.Static | BindingFlags.Public)
                 .FirstOrDefault(method =>
                 {
                     var parameters = method.GetParameters();
-                    return method.Name == "FindObjectOfType" && parameters.Length == 1 && parameters[0].ParameterType == typeof(Type);
+                    return (method.Name == "FindObjectOfType" || method.Name == "FindFirstObjectByType" || method.Name == "FindAnyObjectByType")
+                        && parameters.Length == 1 && parameters[0].ParameterType == typeof(Type);
                 });
 
-            // A still-active, most-recently-started screen wins: the game keeps the
-            // underlying screen active while a panel opens on top of it.
+            // 1. If LobbyScreen is active, it represents the room lobby screen
+            var lobbyType = ReflectionReader.FindTypeByName("Mimick.UI.LobbyScreen");
+            var lobbyCandidate = lobbyType == null ? null : FindScreenInstance(lobbyType, "LobbyScreen");
+            if (lobbyCandidate != null && IsScreenActive(lobbyCandidate))
+            {
+                // Check if an actual popup or PauseMenu is active over the lobby
+                object? topOverlay = null;
+                foreach (var typeName in ScreenTypes)
+                {
+                    var screenType = ReflectionReader.FindTypeByName(typeName);
+                    if (screenType == null) continue;
+                    var candidate = FindScreenInstance(screenType, typeName);
+                    if (candidate != null && IsOverlayScreen(candidate) && IsScreenActive(candidate))
+                    {
+                        topOverlay = candidate;
+                        break;
+                    }
+                }
+
+                if (topOverlay != null)
+                {
+                    OnScreenStarted(topOverlay);
+                    return;
+                }
+
+                OnScreenStarted(lobbyCandidate);
+                return;
+            }
+
+            // 2. If the most recently started screen is an overlay/popup and still active, it holds priority
+            if (_lastStartedScreen != null && IsOverlayScreen(_lastStartedScreen) && IsScreenActive(_lastStartedScreen))
+            {
+                OnScreenStarted(_lastStartedScreen);
+                return;
+            }
+
+            // 3. Scan known overlay/popup screens first so any active popup preempts the background main menu
+            foreach (var typeName in ScreenTypes)
+            {
+                var screenType = ReflectionReader.FindTypeByName(typeName);
+                if (screenType == null)
+                    continue;
+
+                var candidate = FindScreenInstance(screenType, typeName);
+                if (candidate != null && IsOverlayScreen(candidate) && IsScreenActive(candidate))
+                {
+                    OnScreenStarted(candidate);
+                    return;
+                }
+            }
+
+            foreach (var genericType in GetGenericScreenTypes())
+            {
+                var candidate = FindScreenInstance(genericType, genericType.FullName ?? genericType.Name);
+                if (candidate != null && IsOverlayScreen(candidate) && IsScreenActive(candidate))
+                {
+                    OnScreenStarted(candidate);
+                    return;
+                }
+            }
+
+            // 3. If no overlay is open, the most recently started non-overlay screen wins
             if (_lastStartedScreen != null && IsScreenActive(_lastStartedScreen))
             {
                 OnScreenStarted(_lastStartedScreen);
                 return;
             }
 
+            // 4. Fallback: check remaining known screens
             foreach (var typeName in ScreenTypes)
             {
                 var screenType = ReflectionReader.FindTypeByName(typeName);
@@ -717,9 +905,26 @@ internal static class AccessibleMenuHandler
         {
             for (var current = screenType; current != null && known == null; current = current.BaseType)
             {
-                var instance = current.GetProperty("Instance", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-                if (instance?.PropertyType == screenType)
-                    known = instance.GetValue(null);
+                var instanceProp = current.GetProperty("Instance", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                    ?? current.GetProperty("instance", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (instanceProp != null)
+                {
+                    var val = instanceProp.GetValue(null);
+                    if (val != null && screenType.IsInstanceOfType(val))
+                        known = val;
+                }
+
+                if (known == null)
+                {
+                    var instanceField = current.GetField("Instance", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                        ?? current.GetField("instance", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (instanceField != null)
+                    {
+                        var val = instanceField.GetValue(null);
+                        if (val != null && screenType.IsInstanceOfType(val))
+                            known = val;
+                    }
+                }
             }
         }
 
@@ -878,6 +1083,18 @@ internal static class AccessibleMenuHandler
 
         ScreenReader.Say(Loc.Get("menu_activating", option.Label));
         invoke.Invoke(clickEvent, null);
+
+        var pointer = ReadMember(option.Control, "Pointer") as IntPtr?;
+        if (pointer.HasValue)
+        {
+            _labelCache.Remove(pointer.Value);
+            var updatedLabel = ResolveControlLabel(option.Control, option.Label);
+            if (!string.IsNullOrWhiteSpace(updatedLabel) && updatedLabel != option.Label)
+            {
+                _labelCache[pointer.Value] = updatedLabel;
+                ScreenReader.Say(updatedLabel, interrupt: false);
+            }
+        }
     }
 
     private static void AnnounceDropdownOpened(MenuOption option)
@@ -1014,7 +1231,7 @@ internal static class AccessibleMenuHandler
         {
             _controlMembers = ReadMembers(_activeScreen).ToList();
             var root = _inlinePanel ?? ReadMember(_activeScreen, "gameObject");
-            if (root != null && (_inlinePanel != null || IsOverlayScreen(_activeScreen)) && DateTime.UtcNow >= _nextHierarchyRefresh)
+            if (root != null && (_inlinePanel != null || IsOverlayScreen(_activeScreen) || _activeScreen.GetType().Name == "LobbyScreen") && DateTime.UtcNow >= _nextHierarchyRefresh)
             {
                 _nextHierarchyRefresh = DateTime.UtcNow.AddMilliseconds(1000);
                 var discovered = new List<(object Control, string Fallback, ControlKind Kind)>();
@@ -1083,6 +1300,7 @@ internal static class AccessibleMenuHandler
             _logger?.Warning($"Could not inspect active menu controls: {exception.Message}");
         }
 
+        var wasEmpty = _options.Count == 0;
         _options = refreshed;
         if (_options.Count != _lastLoggedOptionCount)
         {
@@ -1099,6 +1317,11 @@ internal static class AccessibleMenuHandler
 
         var previousIndex = previousControl == null ? -1 : _options.FindIndex(option => AreSameControl(option.Control, previousControl));
         _currentIndex = previousIndex >= 0 ? previousIndex : Math.Clamp(_currentIndex, 0, _options.Count - 1);
+
+        if (wasEmpty && !forceRefresh)
+        {
+            AnnounceCurrentOption();
+        }
     }
 
     private static void AddNestedControls(List<MenuOption> refreshed, object holder, string prefix)
@@ -1187,6 +1410,8 @@ internal static class AccessibleMenuHandler
         "Il2CppMimick.UI.FriendEntryUI",
         "Il2CppMimick.UI.FriendRowUI",
         "Il2CppMimick.UI.PlayerLobbyRowUI",
+        "Il2CppMimick.UI.RuleRowUI",
+        "Il2CppMimick.UI.VisibilityToggle",
         "Il2CppMimick.UI.SkinCellUI",
         "Il2CppMimick.UI.AuraCellUI",
         "Il2CppMimick.UI.WorkshopRowUI",
@@ -1784,6 +2009,20 @@ internal static class AccessibleMenuHandler
     private static MethodInfo? FindDeclaredNoArgumentMethod(Type type, string name)
     {
         var method = FindUniqueNoArgumentMethod(type, name);
+        return method != null && method.DeclaringType == type ? method : null;
+    }
+
+    private static MethodInfo? FindUniqueBoolMethod(Type type, string name)
+    {
+        var methods = type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(method => method.Name == name && method.GetParameters().Length == 1 && method.GetParameters()[0].ParameterType == typeof(bool))
+            .ToArray();
+        return methods.Length == 1 ? methods[0] : null;
+    }
+
+    private static MethodInfo? FindDeclaredBoolMethod(Type type, string name)
+    {
+        var method = FindUniqueBoolMethod(type, name);
         return method != null && method.DeclaringType == type ? method : null;
     }
 

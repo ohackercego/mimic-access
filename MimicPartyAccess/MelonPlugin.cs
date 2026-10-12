@@ -1,7 +1,7 @@
 using HarmonyLib;
 using MelonLoader;
 
-[assembly: MelonInfo(typeof(MimicPartyAccess.MelonPlugin), "Mimic Party Access", "0.1.0", "OpenCode", null)]
+[assembly: MelonInfo(typeof(MimicPartyAccess.MelonPlugin), "Mimic Party Access", "2.0.0", "OpenCode", null)]
 [assembly: MelonGame("FoliesAPP", "Mimic Party")]
 
 namespace MimicPartyAccess;
